@@ -1,463 +1,198 @@
-import { useState, useEffect } from "react";
-import { db } from "../firebase/config";
-import {
-  collection,
-  getDocs,
-  setDoc,
-  doc,
-  query,
-  orderBy,
-  limit,
-  Timestamp,
-} from "firebase/firestore";
+import { useState, useEffect } from 'react';
+import { db } from '../firebase/config';
+import { collection, getDocs, doc, setDoc, query, orderBy, limit, Timestamp } from 'firebase/firestore';
 
-export default function KOTPanel() {
-  const [kotItems, setKotItems] = useState([]);
-  const [subTotal, setSubTotal] = useState(0);
-  const [discount, setDiscount] = useState(0);
-  const [total, setTotal] = useState(0);
+export default function KOTPanel({ selectedItems, onQuantityChange, onRemoveItem }) {
+  const [kotId, setKotId] = useState('');
   const [showNumberPad, setShowNumberPad] = useState(false);
-  const [quantityInput, setQuantityInput] = useState("");
-  const [selectedItemIndex, setSelectedItemIndex] = useState(null);
-  const [kotId, setKotId] = useState("");
-  const [isPaymentModalOpen, setIsPaymentModalOpen] = useState(false);
-  const [paymentMethod, setPaymentMethod] = useState("");
+  const [quantityInput, setQuantityInput] = useState('');
+  const [selectedIndex, setSelectedIndex] = useState(null);
+  const [paymentMethod, setPaymentMethod] = useState('');
+  const [showPaymentModal, setShowPaymentModal] = useState(false);
   const [isPaymentProcessed, setIsPaymentProcessed] = useState(false);
 
-  const userId = "1234"; // Replace with logged-in user ID
+  // Totals calculation
+  const subtotal = selectedItems.reduce((sum, item) => sum + (item.price * item.quantity), 0);
+  const total = subtotal;
 
-  // Dummy items (replace with actual selection logic)
-  const availableItems = [
-    { id: "item01", name: "Manchurian Wrap", price: 200 },
-    { id: "item02", name: "Veg Burger", price: 150 },
-    { id: "item03", name: "Paneer Pizza", price: 250 },
-    // Add more items as needed
-  ];
-
-  const handleAddItem = (item) => {
-    const existing = kotItems.find((i) => i.id === item.id);
-    if (existing) {
-      const updated = kotItems.map((i) =>
-        i.id === item.id ? { ...i, quantity: i.quantity + 1 } : i
-      );
-      setKotItems(updated);
-    } else {
-      setKotItems((prev) => [...prev, { ...item, quantity: 1 }]);
-    }
-  };
-
-  const updateTotals = (items = kotItems) => {
-    const subtotal = items.reduce(
-      (sum, item) => sum + item.price * item.quantity,
-      0
-    );
-    setSubTotal(subtotal);
-    setDiscount(0); // Set discount logic as needed
-    setTotal(subtotal); // Adjust total calculation if discount applies
-  };
-
-  useEffect(() => {
-    updateTotals();
-  }, [kotItems]);
-
-  const openNumberPad = (index) => {
-    setSelectedItemIndex(index);
-    setQuantityInput("");
-    setShowNumberPad(true);
-  };
-  
-  const handleNumberPadInput = (num) => {
-    setQuantityInput((prev) => prev + num);
-  };
-  
-  const clearInput = () => setQuantityInput("");
-  
-  const applyQuantity = () => {
-    const qty = parseInt(quantityInput || "1", 10);
-    if (isNaN(qty) || qty <= 0) return;
-    const updated = [...kotItems];
-    updated[selectedItemIndex].quantity = qty;
-    setKotItems(updated);
-    setShowNumberPad(false);
-    updateTotals(updated);
-  };
-  
-  const handleRemoveItem = (index) => {
-    const updated = kotItems.filter((_, i) => i !== index);
-    setKotItems(updated);
-    updateTotals(updated);
-  };
-  
-  const clearItems = () => {
-    setKotItems([]);
-    updateTotals([]);
-    setKotId("");
-    setIsPaymentProcessed(false);
-    setPaymentMethod("");
-  };
-  
-  const handlePayClick = () => {
-    setIsPaymentModalOpen(true);
+  const handleQuantityUpdate = (index, newQuantity) => {
+    onQuantityChange(selectedItems[index].id, Math.max(newQuantity, 1));
   };
 
   const generateKOTId = async () => {
-    const now = new Date();
-    const prefix = `${String(now.getDate()).padStart(2, "0")}${String(
-      now.getMonth() + 1
-    ).padStart(2, "0")}${String(now.getFullYear()).slice(-2)}`;
-
-    const kotQuery = query(
-      collection(db, "KOT"),
-      orderBy("kot_id", "desc"),
-      limit(1)
-    );
+    const date = new Date();
+    const prefix = `${date.getDate().toString().padStart(2, '0')}${(date.getMonth() + 1).toString().padStart(2, '0')}${date.getFullYear().toString().slice(-2)}`;
+    
+    const kotQuery = query(collection(db, 'KOT'), orderBy('kot_id', 'desc'), limit(1));
     const snapshot = await getDocs(kotQuery);
-    let number = 1;
+    
+    let sequence = 1;
     if (!snapshot.empty) {
       const lastId = snapshot.docs[0].data().kot_id;
-      const lastNum = parseInt(lastId.slice(6)) || 0;
-      number = lastNum + 1;
+      sequence = parseInt(lastId.slice(6)) + 1;
     }
-    return `${prefix}${number}`;
+    
+    return `${prefix}${sequence.toString().padStart(4, '0')}`;
   };
 
-  const handleGenerateKOT = async () => {
-    if (!isPaymentProcessed) {
-      alert("Please process payment before saving KOT.");
-      return;
-    }
-  
-    const newKOTId = await generateKOTId();
-    setKotId(newKOTId); // Show KOT ID in UI
-  
-    const data = {
-      kot_id: newKOTId,
-      date: Timestamp.now(),
-      amount: total,
-      user_id: userId,
-      item_id: kotItems.map((item) => ({
+  const handleSaveKOT = async () => {
+    if (!isPaymentProcessed) return alert('Complete payment first');
+    
+    const newKotId = await generateKOTId();
+    const kotData = {
+      kot_id: newKotId,
+      items: selectedItems.map(item => ({
         id: item.id,
+        name: item.itemName,
         quantity: item.quantity,
+        price: item.price,
+        sauce: item.selectedSauce || null
       })),
+      total,
+      timestamp: Timestamp.now(),
     };
-  
-    await setDoc(doc(db, "KOT", newKOTId), data);
-    alert("KOT saved!");
-  
-    // Print KOT in a styled format
-    if (typeof window !== 'undefined' && window.document) {
-      const printContent = `
-        <div style="font-family: Arial, sans-serif; border: 1px solid #000; padding: 10px; width: 200px;">
-          <h3 style="text-align: center;">KOT</h3>
-          <p><strong>KOT ID:</strong> ${newKOTId}</p>
-          <table style="width: 100%; border-collapse: collapse;">
-            <thead>
-              <tr>
-                <th style="border: 1px solid #000; padding: 5px;">Item</th>
-                <th style="border: 1px solid #000; padding: 5px;">Quantity</th>
-                <th style="border: 1px solid #000; padding: 5px;">Price</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${kotItems
-                .map(
-                  (item) =>
-                    `<tr>
-                      <td style="border: 1px solid #000; padding: 5px;">${item.name}</td>
-                      <td style="border: 1px solid #000; padding: 5px;">${item.quantity}</td>
-                      <td style="border: 1px solid #000; padding: 5px;">₹${
-                        item.quantity * item.price
-                      }</td>
-                    </tr>`
-                )
-                .join("")}
-            </tbody>
-          </table>
-          <p><strong>Sub Total:</strong> ₹${subTotal}</p>
-          <p><strong>Discount:</strong> ₹${discount}</p>
-          <p><strong>Tax:</strong> --</p>
-          <p><strong>Total:</strong> ₹${total}</p>
-        </div>
-      `;
-  
-      const printWindow = window.open("", "_blank");
-      if (printWindow) {
-        printWindow.document.open();
-        printWindow.document.write(printContent);
-        printWindow.document.close();
-        printWindow.print();
-        printWindow.close();
-      } else {
-        alert("Print window was blocked by the browser. Please allow popups and try again.");
-      }
-    }
-  
-    clearItems();
+
+    await setDoc(doc(db, 'KOT', newKotId), kotData);
+    setKotId(newKotId);
+    printKOT(newKotId);
   };
-  
-  
-  
 
- 
+  const printKOT = (kotNumber) => {
+    const printContent = `
+      <div style="font-family: Arial; padding: 20px; max-width: 300px;">
+        <h2 style="text-align: center; margin-bottom: 15px;">KOT #${kotNumber}</h2>
+        <div style="margin-bottom: 15px;">
+          ${selectedItems.map(item => `
+            <div style="display: flex; justify-content: space-between; margin-bottom: 8px;">
+              <span>${item.quantity}x ${item.itemName}</span>
+              <span>£${(item.quantity * item.price).toFixed(2)}</span>
+            </div>
+          `).join('')}
+        </div>
+        <hr style="margin: 15px 0;">
+        <div style="display: flex; justify-content: space-between; font-weight: bold;">
+          <span>Total:</span>
+          <span>£${total.toFixed(2)}</span>
+        </div>
+      </div>
+    `;
 
-  const handleProcessPayment = () => {
-    if (paymentMethod) {
-      setIsPaymentProcessed(true);
-      setIsPaymentModalOpen(false);
-    } else {
-      alert("Please select a payment method.");
-    }
+    const printWindow = window.open('', '_blank');
+    printWindow.document.write(printContent);
+    printWindow.document.close();
+    printWindow.print();
   };
 
   return (
-  <div className="p-4 w-full max-w-3xl mx-auto">
-    <h2 className="text-2xl font-bold mb-4">ORDER</h2>
-
-    {kotId && (
-      <div className="mb-4 text-base font-semibold text-indigo-700 border border-indigo-300 rounded p-2 bg-indigo-50">
-        KOT ID: <span className="font-mono">{kotId}</span>
-      </div>
-    )}
-
-    <div className="mb-4 flex flex-wrap gap-2">
-      {availableItems.map((item) => (
-        <button
-          key={item.id}
-          onClick={() => handleAddItem(item)}
-          className="bg-green-600 text-white px-3 py-2 rounded"
-        >
-          {item.name}
-        </button>
-      ))}
-    </div>
-
-    <div className="border p-4 rounded mb-4 bg-white">
-      <table className="w-full text-left mb-4">
-        <thead>
-          <tr>
-            <th>ITEM</th>
-            <th>QUANTITY</th>
-            <th>PRICE</th>
-            <th></th>
-          </tr>
-        </thead>
-        <tbody>
-          {kotItems.map((item, index) => (
-            <tr key={index}>
-              <td>{item.name}</td>
-              <td>
-                <div className="flex items-center gap-2">
-                  <button
-                    onClick={() => {
-                      const updated = [...kotItems];
-                      updated[index].quantity = Math.max(
-                        updated[index].quantity - 1,
-                        1
-                      );
-                      setKotItems(updated);
-                      updateTotals(updated);
-                    }}
-                    className="bg-gray-300 text-xl w-6 h-6 rounded-full flex items-center justify-center"
-                  >
-                    -
-                  </button>
-                  <button
-                    onClick={() => openNumberPad(index)}
-                    className="bg-gray-100 text-xl w-6 h-6 rounded-full flex items-center justify-center"
-                  >
-                    {item.quantity}
-                  </button>
-                  <button
-                    onClick={() => {
-                      const updated = [...kotItems];
-                      updated[index].quantity += 1;
-                      setKotItems(updated);
-                      updateTotals(updated);
-                    }}
-                    className="bg-gray-300 text-xl w-6 h-6 rounded-full flex items-center justify-center"
-                  >
-                    +
-                  </button>
-                </div>
-              </td>
-              <td>₹{item.quantity * item.price}</td>
-              <td>
-                <button
-                  onClick={() => handleRemoveItem(index)}
-                  className="text-red-600"
-                >
-                  ❌
-                </button>
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-
-      <div>
-        <p>Sub Total: ₹{subTotal}</p>
-        <p>Discount: ₹{discount}</p>
-        <p>Tax: --</p>
-        <p className="font-bold text-lg">Total: ₹{total}</p>
-      </div>
-    </div>
-
-    <div className="grid grid-cols-4 gap-2 mb-4">
-      <button
-        onClick={() => alert("Total calculated: ₹" + total)}
-        className="bg-green-600 text-white p-2 rounded"
-      >
-        TOTAL
-      </button>
-      <button
-        onClick={clearItems}
-        className="bg-red-600 text-white p-2 rounded"
-      >
-        CANCEL
-      </button>
-      <button
-        onClick={clearItems}
-        className="bg-blue-600 text-white p-2 rounded"
-      >
-        CLEAR
-      </button>
-      <button
-        onClick={() => setShowNumberPad(true)}
-        className="bg-blue-600 text-white p-2 rounded"
-      >
-        NUMBER PAD
-      </button>
-      <button
-        onClick={handlePayClick}
-        className="bg-blue-600 text-white p-2 rounded"
-      >
-        PAY
-      </button>
-      <div className="col-span-2">
-        <button
-          onClick={handleGenerateKOT}
-          disabled={!isPaymentProcessed}
-          className={`w-full text-white p-2 rounded ${
-            isPaymentProcessed ? "bg-green-800" : "bg-gray-500 cursor-not-allowed"
-          }`}
-        >
-          SAVE KOT
-        </button>
-      </div>
-    </div>
-
-    {/* Number Pad Modal */}
-    {showNumberPad && (
-      <div className="fixed inset-0 bg-black bg-opacity-30 flex justify-center items-center z-50">
-        <div className="bg-white p-6 rounded shadow-lg w-[300px] relative">
-          <button
-            onClick={() => setShowNumberPad(false)}
-            className="absolute top-2 right-2 text-red-600 font-bold text-xl"
-          >
-            ✕
-          </button>
-
-          <div className="text-xl font-semibold mb-2 text-center">
-            Enter Quantity
-          </div>
-
-          <div className="flex items-center justify-center gap-4 mb-4">
-            <button
-              onClick={() =>
-                setQuantityInput((prev) =>
-                  String(Math.max(parseInt(prev || "0", 10) - 1, 1))
-                )
-              }
-              className="bg-gray-300 text-xl w-10 h-10 rounded-full"
-            >
-              -
-            </button>
-
-            <div className="text-3xl text-center border p-2 px-6 bg-gray-100 rounded">
-              {quantityInput || "0"}
+    <div className="flex-1 bg-white rounded-lg shadow-lg p-6 max-w-2xl">
+      <h2 className="text-2xl font-bold mb-6">Current Order</h2>
+      
+      {/* Order Items */}
+      <div className="mb-6 space-y-4">
+        {selectedItems.map((item, index) => (
+          <div key={item.id} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
+            <div className="flex-1">
+              <h3 className="font-semibold">{item.itemName}</h3>
+              {item.selectedSauce && (
+                <p className="text-sm text-gray-600">Sauce: {item.selectedSauce}</p>
+              )}
             </div>
-
-            <button
-              onClick={() =>
-                setQuantityInput((prev) =>
-                  String(parseInt(prev || "0", 10) + 1)
-                )
-              }
-              className="bg-gray-300 text-xl w-10 h-10 rounded-full"
-            >
-              +
-            </button>
-          </div>
-
-          <div className="grid grid-cols-3 gap-2 mb-4">
-            {[1, 2, 3, 4, 5, 6, 7, 8, 9, 0].map((num) => (
+            
+            <div className="flex items-center gap-3">
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => handleQuantityUpdate(index, item.quantity - 1)}
+                  className="px-3 py-1 bg-gray-200 rounded hover:bg-gray-300"
+                >
+                  -
+                </button>
+                <span className="w-8 text-center">{item.quantity}</span>
+                <button
+                  onClick={() => handleQuantityUpdate(index, item.quantity + 1)}
+                  className="px-3 py-1 bg-gray-200 rounded hover:bg-gray-300"
+                >
+                  +
+                </button>
+              </div>
+              <span className="w-20 text-right">£{(item.price * item.quantity).toFixed(2)}</span>
               <button
-                key={num}
-                onClick={() => handleNumberPadInput(String(num))}
-                className="bg-gray-200 text-2xl p-4 rounded"
+                onClick={() => onRemoveItem(item.id)}
+                className="text-red-500 hover:text-red-700"
               >
-                {num}
+                ×
               </button>
-            ))}
-            <button
-              onClick={clearInput}
-              className="bg-yellow-400 col-span-1 p-2 rounded"
-            >
-              Clear
-            </button>
-            <button
-              onClick={applyQuantity}
-              className="bg-green-600 text-white col-span-2 p-2 rounded"
-            >
-              Apply
-            </button>
+            </div>
           </div>
-        </div>
+        ))}
       </div>
-    )}
 
-    {/* Payment Modal */}
-    {isPaymentModalOpen && (
-      <div className="fixed inset-0 bg-black bg-opacity-30 flex justify-center items-center z-50">
-        <div className="bg-white p-6 rounded shadow-lg w-[300px] text-center relative">
-          <button
-            onClick={() => setIsPaymentModalOpen(false)}
-            className="absolute top-2 right-2 text-red-600 font-bold text-xl"
-          >
-            ✕
-          </button>
-          <h3 className="text-xl font-bold mb-4">Select Payment Method</h3>
-          <div className="flex justify-center gap-4 mb-4">
-            <button
-              className={`px-4 py-2 rounded ${
-                paymentMethod === "cash"
-                  ? "bg-green-600 text-white"
-                  : "bg-gray-200"
-              }`}
-              onClick={() => setPaymentMethod("cash")}
-            >
-              Cash
-            </button>
-            <button
-              className={`px-4 py-2 rounded ${
-                paymentMethod === "card"
-                  ? "bg-green-600 text-white"
-                  : "bg-gray-200"
-              }`}
-              onClick={() => setPaymentMethod("card")}
-            >
-              Card
-            </button>
-          </div>
-          <button
-            onClick={handleProcessPayment}
-            className="bg-blue-600 text-white px-6 py-2 rounded"
-          >
-            Process
-          </button>
+      {/* Totals */}
+      <div className="mb-6 space-y-2">
+        <div className="flex justify-between font-semibold">
+          <span>Subtotal:</span>
+          <span>£{subtotal.toFixed(2)}</span>
+        </div>
+        <div className="flex justify-between text-2xl font-bold">
+          <span>Total:</span>
+          <span>£{total.toFixed(2)}</span>
         </div>
       </div>
-    )}
-  </div>
-);
+
+      {/* Action Buttons */}
+      <div className="grid grid-cols-2 gap-4">
+        <button
+          onClick={() => setShowPaymentModal(true)}
+          className="py-3 bg-green-600 text-white rounded-lg hover:bg-green-700"
+        >
+          Process Payment
+        </button>
+        <button
+          onClick={handleSaveKOT}
+          disabled={!isPaymentProcessed || selectedItems.length === 0}
+          className={`py-3 rounded-lg ${isPaymentProcessed ? 'bg-blue-600 hover:bg-blue-700' : 'bg-gray-400'} text-white`}
+        >
+          {kotId ? `Print KOT (${kotId})` : 'Save KOT'}
+        </button>
+      </div>
+
+      {/* Payment Modal */}
+      {showPaymentModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center">
+          <div className="bg-white rounded-xl p-6 w-96">
+            <h3 className="text-xl font-bold mb-4">Select Payment Method</h3>
+            <div className="space-y-3 mb-6">
+              {['Cash', 'Card', 'Mobile'].map(method => (
+                <button
+                  key={method}
+                  onClick={() => setPaymentMethod(method)}
+                  className={`w-full p-3 rounded-lg ${paymentMethod === method ? 'bg-blue-600 text-white' : 'bg-gray-100'}`}
+                >
+                  {method}
+                </button>
+              ))}
+            </div>
+            <div className="flex gap-3">
+              <button
+                onClick={() => {
+                  if (paymentMethod) {
+                    setIsPaymentProcessed(true);
+                    setShowPaymentModal(false);
+                  }
+                }}
+                className="flex-1 py-2 bg-green-600 text-white rounded-lg"
+              >
+                Confirm Payment
+              </button>
+              <button
+                onClick={() => setShowPaymentModal(false)}
+                className="py-2 px-4 bg-gray-200 rounded-lg"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
 }
